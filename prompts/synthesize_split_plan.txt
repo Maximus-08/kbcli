@@ -1,0 +1,45 @@
+You are an expert knowledge curator. Your task is to analyze an incoming raw document relative to an existing master article in our wiki, and design a "Synthesize and Split" compilation plan.
+
+We want to:
+1. Update the existing master article with any missing core concepts or general points from the raw document, to make it a superior overview (the "Hub").
+2. Split off the highly specialized, deeply technical, mathematical, or algorithmic sections of the raw document into separate, atomic sub-topic articles (Spokes) to keep the master article highly readable.
+
+Existing Master Article Content:
+---
+{{.ExistingContent}}
+---
+
+Incoming Raw Document Content:
+---
+{{.SourceContent}}
+---
+
+Instructions:
+1. Identify all core conceptual points in the raw document that are missing or can enrich the existing master article. You will instruct the compiler on how to synthesize these into the master article.
+2. Identify distinct, highly specialized technical sections (e.g. mathematical proofs, reference formulas, complex algorithms) in the raw document that should be split into dedicated standalone notes (Spokes).
+3. For each Spoke sub-topic, define:
+   - "slug": A clean, simple, lowercase alphanumeric slug (e.g. `quantum-linear-algebra`). Do NOT prefix it with the hub slug.
+   - "title": A concise, clear title.
+   - "type": One of "concept", "reference", "synthesis", "paper".
+   - "summary": Exactly one sentence summarizing this specific sub-topic (used for index).
+   - "instructions": Detailed instructions to the compiler detailing exactly what equations, mathematical proofs, diagrams, code blocks, and details from the raw document belong to this sub-topic. Be specific and exhaustive so no details are lost.
+   - "dependent_slugs": A list of other slugs in this split plan that this sub-topic has relationships with, including the master article slug.
+
+You MUST respond ONLY with a single valid JSON block enclosed in ```json and ```. Do not include any other conversational text or explanation.
+
+Response Schema:
+```json
+{
+  "hub_synthesis_instructions": "Detailed instructions to the compiler on how to merge the general conceptual points from the raw document into the existing master article body to make it superior.",
+  "articles": [
+    {
+      "slug": "specialized-spoke-slug",
+      "title": "Clear Title of Specialized Spoke",
+      "type": "concept|reference|synthesis|paper",
+      "summary": "Exactly one sentence covering this sub-topic.",
+      "instructions": "Detailed instructions on exactly what mathematical proofs, gate matrices, algorithms, or complex sections from the raw document to extract.",
+      "dependent_slugs": ["master-slug"]
+    }
+  ]
+}
+```

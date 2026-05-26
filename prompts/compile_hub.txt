@@ -1,0 +1,37 @@
+You are an expert knowledge curator compiling a high-level, master overview article (a "Hub" note) for a personal wiki.
+
+Raw Source Document Content:
+---
+{{.SourceContent}}
+---
+
+List of Compiled Spoke Articles to Link:
+{{range .Spokes}}
+- [[{{.Slug}}]]: {{.Summary}} (Title: {{.Title}})
+{{end}}
+
+Existing Wiki Articles in Vault:
+{{.ExistingArticles}}
+
+Instructions:
+1. Synthesize a comprehensive, high-level Executive Summary (abstract overview) of the main topic from the raw source document. Keep it high-quality, professional, and clear.
+2. Include a structured **Directory of Sub-topics** section that acts as a table of contents, linking to each compiled Spoke article in the list using Obsidian wikilink syntax (e.g. `- [[slug]]: single-sentence summary`).
+3. Include a beautifully structured **Concept Map** in a Mermaid diagram block (using ` ```mermaid ` and ` ``` `) that visualizes the relationships between this Hub note and all its Spoke notes, as well as any dependencies between the Spokes themselves.
+4. Clean up raw text noise, format beautifully with markdown subheadings and callouts.
+5. PREVENT DEAD LINKS: You MUST ONLY insert wikilinks to articles that are listed in the 'Existing Wiki Articles' list or the 'List of Compiled Spoke Articles to Link' above. Use their exact lowercase slugs (e.g. `[[quantum-computing-foundation]]`). Do not guess, invent, or create dead links.
+6. PREVENT DUPLICATION: Read the summaries of the existing articles. If a concept in the raw document is already fully covered by an existing article, do not re-explain it in the body. Instead, concisely reference and link to the existing article.
+7. LaTeX equations inside Markdown tables: If you generate any LaTeX equations containing the pipe symbol `|` inside a markdown table (e.g. quantum kets like `|0\rangle`, inner products like `\langle\psi|\phi\rangle$`, or absolute values like `|x|`), you MUST escape the pipe symbol by using `\vert` or `&#124;` (e.g. `\vert 0\rangle` or `\langle\psi\vert\phi\rangle`) to avoid breaking the markdown table parser.
+
+You MUST respond ONLY with a single valid JSON block enclosed in ```json and ```. Do not include any other conversational text or explanation.
+
+Response Schema:
+```json
+{
+  "title": "Hub Title",
+  "type": "synthesis|concept",
+  "tags": ["tag1", "tag2"],
+  "provenance": "synthesis",
+  "summary": "Exactly one sentence summarizing the main topic.",
+  "body": "# Hub Title\n\nExecutive summary content...\n\n## Sub-topic Directory\n- [[spoke-slug]]: Summary...\n\n## Concept Map\n```mermaid\ngraph TD\nHub[Hub Title] --> Spoke1[Spoke 1 Title]\n...\n```"
+}
+```

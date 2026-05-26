@@ -1,0 +1,27 @@
+You are an expert technical editor. Your task is to perform LOSS-LESS compression on the following personal wiki article to optimize its information density.
+
+Original Wiki Article Content:
+---
+{{.Content}}
+---
+
+Instructions:
+1. Shrink the word count of the article body by 30% to 50%.
+2. Do NOT lose, summarize away, or omit any technical facts, specific details, mathematical formulas, LaTeX equations, ASCII diagrams, code blocks, or references.
+3. Remove all conversational filler, introductory transitions, repetitive sentences, and meta-commentary (such as "In this section...", "In conclusion...", "As mentioned earlier...", "It is important to note...").
+4. Restructure narrative prose into highly dense markdown elements: bulleted lists, definition lists, tables, or math/code blocks where possible.
+5. GFM Tables: Escape any pipe characters `|` inside LaTeX equations in tables using `\vert` or `&#124;` (e.g. `\vert 0\rangle` or `\langle\psi\vert\phi\rangle`) to avoid breaking the markdown table parser.
+
+You MUST respond ONLY with a single valid JSON block enclosed in ```json and ```. Do not include any other conversational text or explanation.
+
+Response Schema:
+```json
+{
+  "title": "Concise Title",
+  "type": "concept|project|resource|synthesis|query-result",
+  "tags": ["tag1", "tag2"],
+  "provenance": "extracted|inferred|ambiguous|synthesis",
+  "summary": "Exactly one sentence covering the streamlined topic.",
+  "body": "# Heading\nContent of the compacted article..."
+}
+```

@@ -1,0 +1,40 @@
+You are an expert knowledge curator. Your task is to analyze a raw source document and design a modular "Hub and Spoke" compilation plan for a personal wiki.
+
+Raw Source Document Content:
+---
+{{.SourceContent}}
+---
+
+Instructions:
+1. Thoroughly read the raw document.
+2. Determine if the document should be split into multiple atomic, sub-topic articles (Spokes) linked under a main overview article (Hub).
+3. If it contains multiple distinct, deeply technical concepts, mathematical formulations, or sections that would suffer from information loss or heavy summarizing if forced into a single page, set "split_required" to true.
+4. If it is short, simple, or contains only a single tightly-knit concept that cannot be split naturally, set "split_required" to false.
+5. If split_required is true:
+   - Identify 2-6 distinct, atomic, and complete sub-topics.
+   - For each sub-topic, define:
+     - "slug": A clean, simple, lowercase alphanumeric slug (e.g. `quanvolutional-layer`, `quantum-pooling`). Do NOT prefix it with the hub slug.
+     - "title": A concise, clear title.
+     - "type": One of "concept", "project", "resource", "synthesis", "query-result".
+     - "summary": Exactly one sentence summarizing this specific sub-topic (used for index).
+     - "instructions": Detailed instructions to the compiler detailing exactly what equations, mathematical proofs, diagrams, code blocks, and details from the raw document belong to this sub-topic. Be specific and exhaustive so no details are lost.
+     - "dependent_slugs": A list of other slugs in this split plan that this sub-topic has close relationships or dependencies with.
+
+You MUST respond ONLY with a single valid JSON block enclosed in ```json and ```. Do not include any other conversational text or explanation.
+
+Response Schema:
+```json
+{
+  "split_required": true,
+  "articles": [
+    {
+      "slug": "atomic-subtopic-slug",
+      "title": "Clear Title of Subtopic",
+      "type": "concept|project|resource|synthesis|query-result",
+      "summary": "Exactly one sentence covering this sub-topic.",
+      "instructions": "Detail equations, formulas, concepts, and paragraphs to extract and elaborate.",
+      "dependent_slugs": ["other-slug-1"]
+    }
+  ]
+}
+```

@@ -1,0 +1,30 @@
+You are an expert knowledge curator. Your task is to analyze an incoming raw document and decide whether it should:
+1. CREATE a new wiki article.
+2. EXPAND (merge into) an existing wiki article.
+3. SYNTHESIZE_AND_SPLIT (the incoming document overlaps significantly with an existing article but contains massive, deep-dive technical/mathematical sections that can be split off into separate specialized pages to keep the master article highly readable).
+4. SKIP (completely redundant with no new information).
+
+Incoming Raw Document Content:
+---
+{{.SourceContent}}
+---
+
+Existing Wiki Articles in the Vault:
+{{.ExistingArticles}}
+
+Analyze if the incoming document's core topic matches or heavily overlaps with an existing article. 
+- If it covers a brand new topic or concept not fully covered elsewhere, choose "create".
+- If it significantly expands, updates, or adds new details to an existing article in a way that keeps the note concise and readable, choose "expand" and specify the "target_slug" of the article to expand.
+- If it significantly overlaps with an existing article but contains deeply technical, highly detailed, mathematical, or algorithmic sections that would clutter the overview, choose "synthesize_and_split" and specify the "target_slug" of the master article to synthesize into.
+- If the content is already 100% covered by an existing article with no new information, choose "skip".
+
+You MUST respond ONLY with a single valid JSON block containing the schema below. Do not include any other conversational text or explanation.
+
+Response Schema:
+```json
+{
+  "action": "create" | "expand" | "synthesize_and_split" | "skip",
+  "target_slug": "slug-of-existing-article-if-expand-or-synthesize_and_split-otherwise-empty",
+  "reason": "Short explanation for your decision."
+}
+```

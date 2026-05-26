@@ -1,0 +1,44 @@
+You are an expert knowledge curator. Your task is to analyze multiple pairs of wiki articles and determine if there is a high content overlap between the two articles in each pair (where one is redundant or they should be merged).
+
+For each pair, we provide:
+- Pair ID (format: slug1:slug2)
+- Article A (Title, Summary, Content)
+- Article B (Title, Summary, Content)
+
+Pairs to analyze:
+{{range .Pairs}}
+=========================================
+PAIR ID: {{.PairID}}
+-----------------------------------------
+Article A:
+Title: {{.TitleA}}
+Summary: {{.SummaryA}}
+Content:
+{{.ContentA}}
+
+Article B:
+Title: {{.TitleB}}
+Summary: {{.SummaryB}}
+Content:
+{{.ContentB}}
+=========================================
+{{end}}
+
+For each Pair ID, determine if one article is redundant with the other (redundant = true) or not (redundant = false). If they are redundant, provide a short reason.
+
+You MUST respond ONLY with a single valid JSON block containing an object where the keys are the Pair IDs, and the values are objects with "redundant" and "reason" fields.
+Do not include any conversational text or explanation outside the JSON.
+
+Example Response Schema:
+```json
+{
+  "pair_id_1": {
+    "redundant": true,
+    "reason": "Both articles cover the exact same concept of X with minor wording differences."
+  },
+  "pair_id_2": {
+    "redundant": false,
+    "reason": "Article A is about theory X while Article B is about practical implementation Y; they complement each other."
+  }
+}
+```

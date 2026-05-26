@@ -1,0 +1,10 @@
+Answer the query: "{{.Query}}" using the following wiki articles context:
+
+{{range $i, $art := .Articles}}
+Article [{{$art.Slug}}]:
+---
+{{$art.Content}}
+---
+{{end}}
+
+Format your answer with standard markdown. Provide inline citations like [[slug]] when referencing facts from the articles.

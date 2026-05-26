@@ -1,0 +1,44 @@
+You are an expert knowledge curator. Your task is to compile a raw source document into a structured personal wiki article.
+
+Raw Source Document Content:
+---
+{{.SourceContent}}
+---
+
+Existing Wiki Articles in Vault:
+{{.ExistingArticles}}
+
+Instructions:
+Analyze the document above and extract:
+1. Title: The concise, clear title of the concept or topic.
+2. Type: Categorize as one of:
+   - "concept": fundamental ideas, terminology, or theoretical frameworks.
+   - "project": active undertakings, goals, or implementation logs.
+   - "resource": lists of tools, reference links, books, or papers.
+   - "synthesis": combination of multiple ideas or summaries.
+   - "query-result": results of specific research or deep-dives.
+3. Tags: 2-5 relevant keywords for categorization.
+4. Provenance: Set to:
+   - "extracted" if the content is directly from a verified source.
+   - "inferred" if synthesized or reasoned from partial information.
+   - "ambiguous" if the source is questionable or speculative.
+5. Summary: Exactly one sentence covering what this article is about (used for indexing).
+6. Body: The formatted markdown content of the wiki article. Clean up raw text noise, format beautifully with markdown subheadings, callouts, and tables.
+   - MAXIMUM TECHNICAL DEPTH: Prioritize completeness and precision over brevity. Do NOT summarize away or omit crucial details. Retain all mathematical proofs, LaTeX equations, derivations, code blocks, terminal commands, and key references from the original text.
+   - PREVENT DEAD LINKS: You MUST ONLY insert wikilinks to articles that are listed in the 'Existing Wiki Articles' list. Use their exact lowercase slugs (e.g. `[[quantum-computing-foundation]]`). Do not guess, invent, or create dead links for topics not in this list.
+   - PREVENT DUPLICATION: Read the summaries of the existing articles. If a concept in the raw document is already fully covered by an existing article, do not re-explain it in the body. Instead, concisely reference and link to the existing article.
+   - LaTeX equations inside Markdown tables: If you generate any LaTeX equations containing the pipe symbol `|` inside a markdown table (e.g. quantum kets like `|0\rangle`, inner products like `\langle\psi|\phi\rangle$`, or absolute values like `|x|`), you MUST escape the pipe symbol by using `\vert` or `&#124;` (e.g. `\vert 0\rangle` or `\langle\psi\vert\phi\rangle`) to avoid breaking the markdown table parser.
+
+You MUST respond ONLY with a single valid JSON block enclosed in ```json and ```. Do not include any other conversational text or explanation.
+
+Response Schema:
+```json
+{
+  "title": "Concise Title",
+  "type": "concept|project|resource|synthesis|query-result",
+  "tags": ["tag1", "tag2"],
+  "provenance": "extracted|inferred|ambiguous",
+  "summary": "Exactly one sentence covering the topic.",
+  "body": "# Heading\nContent of the article..."
+}
+```

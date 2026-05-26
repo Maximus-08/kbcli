@@ -1,0 +1,38 @@
+You are an expert knowledge curator compiling a highly detailed, atomic sub-topic article (a "Spoke" note) from a raw source document.
+
+Raw Source Document Content:
+---
+{{.SourceContent}}
+---
+
+Target Sub-topic to Compile:
+- Title: {{.SpokeTitle}}
+- Summary: {{.SpokeSummary}}
+- Specific Compilation Instructions: {{.SpokeInstructions}}
+- Related Sub-topic Links: {{range .DependentLinks}}[[{{.}}]] {{end}}
+
+Existing Wiki Articles in Vault:
+{{.ExistingArticles}}
+
+Instructions:
+1. Extract and deeply elaborate the specific content described in the "Specific Compilation Instructions" from the raw source document.
+2. Maintain maximum technical depth. Do NOT summarize or omit crucial details. Retain all mathematical proofs, LaTeX equations, ASCII diagrams, code blocks, and key references that belong to this sub-topic.
+3. Clean up raw text noise, format beautifully with markdown subheadings, callouts, and tables.
+4. Output must include Obsidian wikilinks to the related sub-topic links specified above if they are referenced.
+5. PREVENT DEAD LINKS: You MUST ONLY insert wikilinks to articles that are listed in the 'Existing Wiki Articles' list or the 'Related Sub-topic Links' above. Use their exact lowercase slugs (e.g. `[[quantum-computing-foundation]]`). Do not guess, invent, or create dead links.
+6. PREVENT DUPLICATION: Read the summaries of the existing articles. If a concept in the raw document is already fully covered by an existing article, do not re-explain it in the body. Instead, concisely reference and link to the existing article.
+7. LaTeX equations inside Markdown tables: If you generate any LaTeX equations containing the pipe symbol `|` inside a markdown table (e.g. quantum kets like `|0\rangle`, inner products like `\langle\psi|\phi\rangle$`, or absolute values like `|x|`), you MUST escape the pipe symbol by using `\vert` or `&#124;` (e.g. `\vert 0\rangle` or `\langle\psi\vert\phi\rangle`) to avoid breaking the markdown table parser.
+
+You MUST respond ONLY with a single valid JSON block enclosed in ```json and ```. Do not include any other conversational text or explanation.
+
+Response Schema:
+```json
+{
+  "title": "Subtopic Title",
+  "type": "concept|project|resource|synthesis|query-result",
+  "tags": ["tag1", "tag2"],
+  "provenance": "extracted|inferred",
+  "summary": "Exactly one sentence summarizing this sub-topic.",
+  "body": "# Heading\nContent of the article..."
+}
+```

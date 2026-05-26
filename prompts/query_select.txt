@@ -1,0 +1,5 @@
+Which of these articles are relevant to answer the query: "{{.Query}}"?
+List of articles:
+{{.Index}}
+
+Provide a JSON array of slugs, e.g., ["slug1", "slug2"]. Only return the JSON array.

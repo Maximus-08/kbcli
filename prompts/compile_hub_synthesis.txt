@@ -1,0 +1,46 @@
+You are an expert knowledge curator. Your task is to merge and expand an existing master wiki article (the Hub) with general conceptual points from a raw source document, and link it to newly compiled specialized sub-topic articles (the Spokes).
+
+Existing Master Wiki Article Content:
+---
+{{.ExistingContent}}
+---
+
+New Raw Source Document Content:
+---
+{{.SourceContent}}
+---
+
+Synthesis Instructions:
+---
+{{.SynthesisInstructions}}
+---
+
+Newly Compiled Specialized Spokes:
+{{range .Spokes}}
+- [[{{.Slug}}]]: {{.Title}} — {{.Summary}}
+{{end}}
+
+Existing Wiki Articles in Vault (for wikilink reference):
+{{.ExistingArticles}}
+
+Instructions:
+1. Integrate the new information from the raw document into the existing master article, strictly following the 'Synthesis Instructions' provided.
+2. In the appropriate sections of the master article, insert highly visible references or callouts linking to the newly compiled specialized Spokes (e.g. "For the rigorous mathematical details, see [[quantum-linear-algebra]]").
+3. Preserve all valuable details, references, and structure of the existing master article. Do not lose existing knowledge.
+4. Update the Title, Tags, Summary, and Provenance of the master article to reflect its enriched overview scope.
+5. PREVENT DEAD LINKS: You MUST ONLY insert wikilinks to articles that are listed in either the 'Newly Compiled Specialized Spokes' or the 'Existing Wiki Articles' list. Use their exact slugs (e.g. `[[quantum-math-and-algorithms]]`).
+6. LaTeX equations inside Markdown tables: If you generate any LaTeX equations containing the pipe symbol `|` inside a markdown table (e.g. kets like `|0\rangle`, inner products like `\langle\psi|\phi\rangle$`, or absolute values like `|x|`), you MUST escape the pipe symbol by using `\vert` or `&#124;` (e.g. `\vert 0\rangle` or `\langle\psi\vert\phi\rangle`) to avoid breaking the markdown table parser.
+
+You MUST respond ONLY with a single valid JSON block enclosed in ```json and ```. Do not include any other conversational text or explanation.
+
+Response Schema:
+```json
+{
+  "title": "Updated Title",
+  "type": "concept|project|resource|synthesis|query-result",
+  "tags": ["tag1", "tag2"],
+  "provenance": "extracted|inferred|ambiguous|synthesis",
+  "summary": "Exactly one sentence covering the updated/expanded overview.",
+  "body": "# Heading\nContent of the updated master article..."
+}
+```

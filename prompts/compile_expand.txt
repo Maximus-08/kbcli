@@ -1,0 +1,40 @@
+You are an expert knowledge curator. Your task is to merge and expand an existing wiki article with new information from a raw source document.
+
+Existing Wiki Article Content:
+---
+{{.ExistingContent}}
+---
+
+New Raw Source Document Content:
+---
+{{.SourceContent}}
+---
+
+Existing Wiki Articles in Vault (for wikilink reference):
+{{.ExistingArticles}}
+
+Instructions:
+1. Integrate the new information from the raw document into the existing article.
+2. Preserve all valuable details, references, and structure of the existing article. Do not lose existing knowledge.
+3. Update the Title, Tags, Summary, and Provenance if the new information changes or expands the scope.
+4. Keep the body formatted in clean markdown, updating/adding sections as needed.
+5. PREVENT DEAD LINKS: You MUST ONLY insert wikilinks to articles that are listed in the 'Existing Wiki Articles' list. Use their exact lowercase slugs (e.g. `[[quantum-computing-foundation]]`). Do not guess or invent wikilinks not in this list.
+6. CONFLICT RESOLUTION: If you find conflicting facts or numbers between the existing article and the raw note that cannot be reconciled, do not silently delete or overwrite either. Instead, capture both and explicitly tag them under a clear callout warning block in the markdown body:
+   > [!WARNING] Conflict Detected
+   > Existing article claims: ...
+   > Raw note claims: ...
+7. LaTeX equations inside Markdown tables: If you generate any LaTeX equations containing the pipe symbol `|` inside a markdown table (e.g. quantum kets like `|0\rangle`, inner products like `\langle\psi|\phi\rangle$`, or absolute values like `|x|`), you MUST escape the pipe symbol by using `\vert` or `&#124;` (e.g. `\vert 0\rangle` or `\langle\psi\vert\phi\rangle`) to avoid breaking the markdown table parser.
+
+You MUST respond ONLY with a single valid JSON block enclosed in ```json and ```. Do not include any other conversational text or explanation.
+
+Response Schema:
+```json
+{
+  "title": "Updated Title",
+  "type": "concept|project|resource|synthesis|query-result",
+  "tags": ["tag1", "tag2"],
+  "provenance": "extracted|inferred|ambiguous|synthesis",
+  "summary": "Exactly one sentence covering the updated/expanded topic.",
+  "body": "# Heading\nContent of the updated article..."
+}
+```
