@@ -40,6 +40,18 @@ To compile new raw notes into structured wiki pages:
   ```bash
   kb compile --multi sources/raw/part1.md sources/raw/part2.md
   ```
+- **Deep-compile via Hub-and-Spoke splitting:**
+  ```bash
+  kb compile --split sources/raw/massive-note.md
+  ```
+- **Technical Compaction:**
+  To optimize wiki articles and compress them losslessly using LLMs:
+  ```bash
+  kb compact slug-name
+  # Or sweep-compact all wiki articles
+  kb compact --all
+  ```
+
 
 ### C. Contextual Querying & Reasoning (RAG)
 To ask questions and gather synthesized knowledge directly from the wiki:
