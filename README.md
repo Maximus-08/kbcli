@@ -224,6 +224,27 @@ Overwrites or repairs a damaged `wiki/INDEX.md` file, scanning all wiki files to
 
 ---
 
+### 8. Document Exporting (`export`)
+Converts Obsidian markdown wiki articles into professionally formatted Microsoft Word (`.docx`) documents. The exporter automatically handles navy/slate typography styling, zebra-striped tables, styled blockquotes, LaTeX-to-Unicode math equations, and monospaced code blocks and flowcharts with exact line spacing and proofing (spellcheck) exemptions.
+
+```bash
+# Export all wiki articles in the vault
+.\bin\kb.exe export -a -f
+
+# Export a specific wiki article
+.\bin\kb.exe export quantum-computing-study-notes-mathematical-foundations-to-algorithms.md
+
+# Export to a custom output directory (defaults to <vault>/export)
+.\bin\kb.exe export -a -o "C:\custom\export\path"
+```
+
+**Export Options:**
+* `-a, --all`: Export all wiki articles.
+* `-f, --force`: Overwrite existing DOCX files in the output directory.
+* `-o, --output`: Specify a custom output directory.
+
+---
+
 ## 🚦 CLI Exit Codes
 
 Automated scripts and AI agents can check the CLI exit codes to handle execution states programmatically:
