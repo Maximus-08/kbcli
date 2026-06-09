@@ -1,4 +1,0 @@
-Check if this wiki article has any consistency issues.
-Title: {{.Title}}
-Content:
-{{.Content}}

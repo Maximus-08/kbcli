@@ -867,63 +867,11 @@ func parseJSONResponse(resp string, logger *slog.Logger) (*compileResponse, erro
 func parseJSONRobustly(jsonStr string) *compileResponse {
 	var res compileResponse
 
-	// Helper to extract a string/value field robustly
-	extractField := func(key string) string {
-		re := regexp.MustCompile(`(?i)["']?` + regexp.QuoteMeta(key) + `["']?\s*:\s*(["']?)`)
-		loc := re.FindStringSubmatchIndex(jsonStr)
-		if len(loc) < 4 {
-			return ""
-		}
-		quoteChar := ""
-		if loc[2] != -1 && loc[3] != -1 {
-			quoteChar = jsonStr[loc[2]:loc[3]]
-		}
-		start := loc[1]
-
-		var val strings.Builder
-		escaped := false
-		runes := []rune(jsonStr[start:])
-		for i := 0; i < len(runes); i++ {
-			r := runes[i]
-			if quoteChar != "" {
-				if escaped {
-					val.WriteRune(r)
-					escaped = false
-				} else if r == '\\' {
-					val.WriteRune(r)
-					escaped = true
-				} else if string(r) == quoteChar {
-					break
-				} else {
-					val.WriteRune(r)
-				}
-			} else {
-				if r == ',' || r == '}' || r == '\n' || r == '\r' {
-					break
-				}
-				val.WriteRune(r)
-			}
-		}
-
-		rawVal := val.String()
-		if quoteChar != "" {
-			// Unescape JSON string content using json.Unmarshal
-			var unescaped string
-			wrapped := `"` + rawVal + `"`
-			if err := json.Unmarshal([]byte(wrapped), &unescaped); err == nil {
-				return unescaped
-			}
-			// Fallback unescape in case unmarshaling wrapped string fails
-			return customUnescape(rawVal)
-		}
-		return strings.TrimSpace(rawVal)
-	}
-
-	res.Title = extractField("title")
-	res.Type = extractField("type")
-	res.Provenance = extractField("provenance")
-	res.Summary = extractField("summary")
-	res.Body = extractField("body")
+	res.Title = extractFieldRobustly(jsonStr, "title")
+	res.Type = extractFieldRobustly(jsonStr, "type")
+	res.Provenance = extractFieldRobustly(jsonStr, "provenance")
+	res.Summary = extractFieldRobustly(jsonStr, "summary")
+	res.Body = extractFieldRobustly(jsonStr, "body")
 
 	// Extract tags robustly from ["']?tags["']?\s*:\s*\[([^\]]*)\]
 	tagsRe := regexp.MustCompile(`(?i)["']?tags["']?\s*:\s*\[([^\]]*)\]`)
@@ -1059,61 +1007,12 @@ func parseSplitPlanRobustly(jsonStr string) splitPlan {
 	}
 
 	for _, obj := range objects {
-		extractField := func(key string) string {
-			re := regexp.MustCompile(`(?i)["']?` + regexp.QuoteMeta(key) + `["']?\s*:\s*(["']?)`)
-			loc := re.FindStringSubmatchIndex(obj)
-			if len(loc) < 4 {
-				return ""
-			}
-			quoteChar := ""
-			if loc[2] != -1 && loc[3] != -1 {
-				quoteChar = obj[loc[2]:loc[3]]
-			}
-			start := loc[1]
-
-			var val strings.Builder
-			escaped := false
-			runes := []rune(obj[start:])
-			for i := 0; i < len(runes); i++ {
-				r := runes[i]
-				if quoteChar != "" {
-					if escaped {
-						val.WriteRune(r)
-						escaped = false
-					} else if r == '\\' {
-						val.WriteRune(r)
-						escaped = true
-					} else if string(r) == quoteChar {
-						break
-					} else {
-						val.WriteRune(r)
-					}
-				} else {
-					if r == ',' || r == '}' || r == '\n' || r == '\r' {
-						break
-					}
-					val.WriteRune(r)
-				}
-			}
-
-			rawVal := val.String()
-			if quoteChar != "" {
-				var unescaped string
-				wrapped := `"` + rawVal + `"`
-				if err := json.Unmarshal([]byte(wrapped), &unescaped); err == nil {
-					return unescaped
-				}
-				return customUnescape(rawVal)
-			}
-			return strings.TrimSpace(rawVal)
-		}
-
 		var sa splitArticle
-		sa.Slug = extractField("slug")
-		sa.Title = extractField("title")
-		sa.Type = extractField("type")
-		sa.Summary = extractField("summary")
-		sa.Instructions = extractField("instructions")
+		sa.Slug = extractFieldRobustly(obj, "slug")
+		sa.Title = extractFieldRobustly(obj, "title")
+		sa.Type = extractFieldRobustly(obj, "type")
+		sa.Summary = extractFieldRobustly(obj, "summary")
+		sa.Instructions = extractFieldRobustly(obj, "instructions")
 
 		depRe := regexp.MustCompile(`(?i)["']?dependent_slugs["']?\s*:\s*\[([^\]]*)\]`)
 		depMatch := depRe.FindStringSubmatch(obj)

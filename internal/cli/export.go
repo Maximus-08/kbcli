@@ -298,6 +298,51 @@ func addText(p *docx.Paragraph, text string) *docx.Run {
 	return run
 }
 
+func handleTextRun(doc *docx.Docx, currentParagraph *docx.Paragraph, txt string, inHeading int, inBlockquote, inBold, inItalic, inCode, inTableHeader bool) *docx.Paragraph {
+	if currentParagraph == nil {
+		currentParagraph = doc.AddParagraph()
+	}
+	run := addText(currentParagraph, txt)
+	if inHeading > 0 {
+		run.Bold()
+		run.RunProperties.Fonts = &docx.RunFonts{ASCII: "Segoe UI Semibold", HAnsi: "Segoe UI Semibold"}
+		switch inHeading {
+		case 1:
+			run.Size("32")
+			run.Color("1F385C")
+		case 2:
+			run.Size("26")
+			run.Color("2E4057")
+		case 3:
+			run.Size("22")
+			run.Color("4A5568")
+		case 4:
+			run.Size("20")
+			run.Color("718096")
+		}
+	}
+	if inBlockquote {
+		run.Italic()
+		run.Color("5A6A85")
+	}
+	if inBold {
+		run.Bold()
+	}
+	if inItalic {
+		run.Italic()
+	}
+	if inCode {
+		run.Color("C7254E")
+		run.Shade("clear", "auto", "F9F2F4")
+		run.RunProperties.Fonts = &docx.RunFonts{ASCII: "Consolas", HAnsi: "Consolas"}
+	}
+	if inTableHeader {
+		run.Color("FFFFFF")
+		run.Bold()
+	}
+	return currentParagraph
+}
+
 func cleanBody(content string) string {
 	content = commentRegex.ReplaceAllString(content, "")
 	content = blockRefRegex.ReplaceAllString(content, "")
@@ -540,47 +585,7 @@ var exportCmd = &cobra.Command{
 						if txt == "" {
 							return ast.WalkContinue, nil
 						}
-						if currentParagraph == nil {
-							currentParagraph = doc.AddParagraph()
-						}
-						run := addText(currentParagraph, txt)
-						if inHeading > 0 {
-							run.Bold()
-							run.RunProperties.Fonts = &docx.RunFonts{ASCII: "Segoe UI Semibold", HAnsi: "Segoe UI Semibold"}
-							switch inHeading {
-							case 1:
-								run.Size("32")
-								run.Color("1F385C")
-							case 2:
-								run.Size("26")
-								run.Color("2E4057")
-							case 3:
-								run.Size("22")
-								run.Color("4A5568")
-							case 4:
-								run.Size("20")
-								run.Color("718096")
-							}
-						}
-						if inBlockquote {
-							run.Italic()
-							run.Color("5A6A85")
-						}
-						if inBold {
-							run.Bold()
-						}
-						if inItalic {
-							run.Italic()
-						}
-						if inCode {
-							run.Color("C7254E")
-							run.Shade("clear", "auto", "F9F2F4")
-							run.RunProperties.Fonts = &docx.RunFonts{ASCII: "Consolas", HAnsi: "Consolas"}
-						}
-						if inTableHeader {
-							run.Color("FFFFFF")
-							run.Bold()
-						}
+						currentParagraph = handleTextRun(doc, currentParagraph, txt, inHeading, inBlockquote, inBold, inItalic, inCode, inTableHeader)
 					}
 				case ast.KindString:
 					if entering {
@@ -588,47 +593,7 @@ var exportCmd = &cobra.Command{
 						if txt == "" {
 							return ast.WalkContinue, nil
 						}
-						if currentParagraph == nil {
-							currentParagraph = doc.AddParagraph()
-						}
-						run := addText(currentParagraph, txt)
-						if inHeading > 0 {
-							run.Bold()
-							run.RunProperties.Fonts = &docx.RunFonts{ASCII: "Segoe UI Semibold", HAnsi: "Segoe UI Semibold"}
-							switch inHeading {
-							case 1:
-								run.Size("32")
-								run.Color("1F385C")
-							case 2:
-								run.Size("26")
-								run.Color("2E4057")
-							case 3:
-								run.Size("22")
-								run.Color("4A5568")
-							case 4:
-								run.Size("20")
-								run.Color("718096")
-							}
-						}
-						if inBlockquote {
-							run.Italic()
-							run.Color("5A6A85")
-						}
-						if inBold {
-							run.Bold()
-						}
-						if inItalic {
-							run.Italic()
-						}
-						if inCode {
-							run.Color("C7254E")
-							run.Shade("clear", "auto", "F9F2F4")
-							run.RunProperties.Fonts = &docx.RunFonts{ASCII: "Consolas", HAnsi: "Consolas"}
-						}
-						if inTableHeader {
-							run.Color("FFFFFF")
-							run.Bold()
-						}
+						currentParagraph = handleTextRun(doc, currentParagraph, txt, inHeading, inBlockquote, inBold, inItalic, inCode, inTableHeader)
 					}
 				case ast.KindEmphasis:
 					if entering {

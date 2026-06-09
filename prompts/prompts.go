@@ -19,8 +19,6 @@ var QueryAnswer string
 //go:embed cleanup_redundancy.txt
 var CleanupRedundancy string
 
-//go:embed lint_check.txt
-var LintCheck string
 
 //go:embed split_plan.txt
 var SplitPlan string
