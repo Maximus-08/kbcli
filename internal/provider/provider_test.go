@@ -133,3 +133,44 @@ func TestSmartRouterFallback(t *testing.T) {
 		t.Errorf("fallback to local Ollama failed or model was not substituted, got: %s, substituted: %v", resp, calledLocal)
 	}
 }
+
+type MockMultimodalProvider struct {
+	MockProvider
+	generateMultimodal func(model, prompt string, images [][]byte, mimeTypes []string) (string, error)
+}
+
+func (m *MockMultimodalProvider) GenerateMultimodal(ctx context.Context, model string, prompt string, images [][]byte, mimeTypes []string) (string, error) {
+	if m.generateMultimodal != nil {
+		return m.generateMultimodal(model, prompt, images, mimeTypes)
+	}
+	return "mock multimodal response", nil
+}
+
+func TestSmartRouterMultimodalRouting(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mockGemini := &MockMultimodalProvider{
+		MockProvider: MockProvider{name: "Gemini", available: true},
+	}
+
+	router := &SmartRouter{
+		gemini: mockGemini,
+		logger: logger,
+	}
+
+	calledMultimodal := false
+	mockGemini.generateMultimodal = func(model, prompt string, images [][]byte, mimeTypes []string) (string, error) {
+		if model == "gemini-2.5-flash" && len(images) == 1 && mimeTypes[0] == "image/png" {
+			calledMultimodal = true
+		}
+		return "gemini multimodal response", nil
+	}
+
+	ctx := context.Background()
+	resp, err := router.GenerateMultimodal(ctx, "gemini-2.5-flash", "describe this", [][]byte{[]byte("fake-image")}, []string{"image/png"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != "gemini multimodal response" || !calledMultimodal {
+		t.Errorf("routing GenerateMultimodal failed, got: %s, called: %v", resp, calledMultimodal)
+	}
+}

@@ -9,6 +9,8 @@
 * **Single-Binary CLI (`kb`)**: Built with Go and powered by Cobra, offering a comprehensive suite of developer-friendly subcommands.
 * **Smart Vault Autodetection**: Automatically discovers your vault root from your current working directory (Cwd) or falls back to `.env` configuration.
 * **Atomic Compilations**: Compiles raw notes in a drop zone into organized, clean wiki articles with automatic slugification, frontmatter generation, and tag extraction.
+* **Multimodal PDF Processing**: Extracts plain text and embedded binary images from PDF source files. Using vision-capable LLMs (e.g. `gemini-2.5-flash`), it batches and generates descriptive captions for diagrams, tables, and charts, presenting them to the compiler to embed them accurately in the generated Markdown.
+* **SHA-256 Image Cache**: Caches generated visual captions locally at `sources/raw/.image_cache.json` using content hashing, ensuring $0$ duplicate API requests on future compiles.
 * **Deep Split Compilation (`--split` / `-s`)**: Parses complex or massive notes and dynamically splits them into atomic, highly cohesive sub-topic articles linked through a hub-and-spoke structure.
 * **Technical Compaction (`compact`)**: Employs lossless tech-compaction on wiki articles to maximize semantic density and eliminate redundant phrasing.
 * **Robust File Watcher**: Monitors the ingestion drop zone in the background with sequential debounced compilation queuing, featuring a polling fallback mode (`--poll`) for WSL or network shares where filesystem events are inconsistent.
@@ -75,6 +77,8 @@ COMPILE_MODEL_MULTI=gemma-4-31b-it
 LINT_MODEL=gemini-3.1-flash-lite
 QUERY_MODEL=gemini-3.5-flash
 CLEANUP_MODEL=gemini-3.1-flash-lite
+# Multimodal image description model
+IMAGE_CAPTION_MODEL=gemini-2.5-flash
 
 OLLAMA_BASE_URL=http://localhost:11434
 LOG_LEVEL=info
@@ -121,6 +125,15 @@ Processes raw source files from the ingestion drop zone and compiles them into c
 * `-m, --multi`: Combine multiple raw inputs into one synthesized wiki file.
 * `-s, --split`: Split a massive note into highly cohesive hub-and-spoke sub-topics.
 * `--dry-run`: Dry-run simulation mode.
+
+#### 📄 PDF Ingestion & Diagram Extraction
+When a PDF file is passed to `compile`, `kb` performs the following steps:
+1. **Text Extraction**: Extracts plain text from the PDF pages.
+2. **Embedded Image Parsing**: Uses `pdfcpu` to extract all embedded raster images to a temporary directory.
+3. **Multimodal Captioning**: Computes a SHA-256 hash of each image. For any uncached images, it batches them (up to 8 at a time) and queries the multimodal LLM (configured via `IMAGE_CAPTION_MODEL`, defaulting to `gemini-2.5-flash`) to generate descriptive captions for charts, tables, or diagrams.
+4. **LLM Context Injection**: Passes descriptions along with filenames to the compilation LLM, allowing it to select and place standard image references (e.g. `![[image_name.png]]`) dynamically where they fit best.
+5. **Caching**: Saves generated descriptions in `sources/raw/.image_cache.json` to prevent duplicate API requests on subsequent compiles.
+6. **Asset Moving & Clean-up**: Copies only the referenced images to `wiki/media/` and deletes the temporary files.
 
 ---
 

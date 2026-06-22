@@ -34,6 +34,10 @@ func WikiDir(cfg *config.Config) string {
 	return filepath.Join(cfg.VaultKBPath, "wiki")
 }
 
+func MediaDir(cfg *config.Config) string {
+	return filepath.Join(cfg.VaultKBPath, "wiki", "media")
+}
+
 func IndexPath(cfg *config.Config) string {
 	return filepath.Join(cfg.VaultKBPath, "wiki", "INDEX.md")
 }
@@ -45,11 +49,15 @@ func WikiFilePath(cfg *config.Config, slug string) string {
 func EnsureStructure(cfg *config.Config) error {
 	raw := RawDir(cfg)
 	wiki := WikiDir(cfg)
+	media := MediaDir(cfg)
 
 	if err := os.MkdirAll(raw, 0755); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(wiki, 0755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(media, 0755); err != nil {
 		return err
 	}
 	return nil

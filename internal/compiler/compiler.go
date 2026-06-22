@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -21,12 +22,17 @@ import (
 	"github.com/avnis/kb-system/internal/vault"
 	"github.com/avnis/kb-system/prompts"
 	"github.com/ledongthuc/pdf"
+	"github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
 type Compiler struct {
-	cfg      *config.Config
-	provider provider.Provider
-	logger   *slog.Logger
+	cfg         *config.Config
+	provider    provider.Provider
+	logger      *slog.Logger
+	mu          sync.Mutex
+	pdfTempDirs map[string]string
+	imageCache  *ImageCache
 }
 
 type compileResponse struct {
@@ -39,10 +45,13 @@ type compileResponse struct {
 }
 
 func New(cfg *config.Config, provider provider.Provider, logger *slog.Logger) *Compiler {
+	cachePath := filepath.Join(cfg.VaultKBPath, "sources", "raw", ".image_cache.json")
 	return &Compiler{
-		cfg:      cfg,
-		provider: provider,
-		logger:   logger,
+		cfg:         cfg,
+		provider:    provider,
+		logger:      logger,
+		pdfTempDirs: make(map[string]string),
+		imageCache:  NewImageCache(cachePath),
 	}
 }
 
@@ -62,6 +71,66 @@ func (c *Compiler) CompileSingle(sourcePath string, force bool, split bool) erro
 		if err != nil {
 			return fmt.Errorf("failed to extract text from PDF: %w", err)
 		}
+
+		// Extract images to a temp directory
+		tempDir, err := os.MkdirTemp("", "kb_pdf_images_*")
+		if err != nil {
+			c.logger.Warn("Failed to create temporary directory for PDF images", "error", err)
+		} else {
+			c.mu.Lock()
+			c.pdfTempDirs[sourcePath] = tempDir
+			c.mu.Unlock()
+			defer func() {
+				c.mu.Lock()
+				delete(c.pdfTempDirs, sourcePath)
+				c.mu.Unlock()
+				os.RemoveAll(tempDir)
+			}()
+
+			c.logger.Info("Extracting embedded images from PDF", "path", sourcePath, "tempDir", tempDir)
+			if err := extractImagesFromPDF(sourcePath, tempDir); err != nil {
+				c.logger.Warn("Failed to extract images from PDF", "error", err)
+			} else {
+				// Read directory and catalog images
+				entries, err := os.ReadDir(tempDir)
+				if err == nil {
+					var imgNames []string
+					for _, entry := range entries {
+						if !entry.IsDir() {
+							name := entry.Name()
+							ext := strings.ToLower(filepath.Ext(name))
+							if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" || ext == ".gif" {
+								imgNames = append(imgNames, name)
+							}
+						}
+					}
+					if len(imgNames) > 0 {
+						captions, _ := c.captionImages(imgNames, tempDir)
+
+						var sb strings.Builder
+						sb.WriteString(pdfText)
+						sb.WriteString("\n\n---\n")
+						sb.WriteString("AVAILABLE EMBEDDED IMAGES:\n")
+						sb.WriteString("If relevant to the article content, you must reference them in the body using the standard Obsidian image syntax: `![[image_name]]` (e.g. `![[page_001_R1.png]]` or whatever the original name from the list below is).\n")
+						sb.WriteString("Do NOT invent other names. Only reference the exact filenames listed below, and only when they are directly relevant to the text of the compiled wiki page.\n")
+						sb.WriteString("Extracted image files:\n")
+						for _, name := range imgNames {
+							sb.WriteString("- ")
+							sb.WriteString(name)
+							if desc, ok := captions[name]; ok && desc != "" {
+								sb.WriteString(" (Description: ")
+								sb.WriteString(desc)
+								sb.WriteString(")")
+							}
+							sb.WriteString("\n")
+						}
+						pdfText = sb.String()
+						c.logger.Info("Discovered and cataloged embedded images in PDF", "count", len(imgNames), "names", imgNames)
+					}
+				}
+			}
+		}
+
 		body = pdfText
 		content = []byte(pdfText)
 		sf = &frontmatter.SourceFrontmatter{
@@ -357,6 +426,7 @@ func (c *Compiler) compileSingleWithSplit(sourcePath string, sf *frontmatter.Sou
 		}
 
 		normalizedBody := c.normalizeLinks(spokeRes.Body)
+		normalizedBody = c.processAndCopyImages(normalizedBody, []string{sourcePath}, spokeSlug)
 		spokeWikiContent, err := frontmatter.Marshal(spokeWf, normalizedBody)
 		if err != nil {
 			return fmt.Errorf("failed to marshal Spoke wiki frontmatter: %w", err)
@@ -445,6 +515,7 @@ func (c *Compiler) compileSingleWithSplit(sourcePath string, sf *frontmatter.Sou
 	}
 
 	normalizedBody := c.normalizeLinks(hubRes.Body)
+	normalizedBody = c.processAndCopyImages(normalizedBody, []string{sourcePath}, hubSlug)
 	hubWikiContent, err := frontmatter.Marshal(hubWf, normalizedBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Hub wiki frontmatter: %w", err)
@@ -494,6 +565,13 @@ func (c *Compiler) CompileMulti(sourcePaths []string, force bool) error {
 		existingArticlesStr = strings.Join(existingArticles, "\n")
 	}
 
+	var tempDirsToClean []string
+	defer func() {
+		for _, dir := range tempDirsToClean {
+			os.RemoveAll(dir)
+		}
+	}()
+
 	var sourcesText []string
 	var alreadyCompiledCount int
 
@@ -507,6 +585,68 @@ func (c *Compiler) CompileMulti(sourcePaths []string, force bool) error {
 			if err != nil {
 				return fmt.Errorf("failed to extract text from PDF %s: %w", p, err)
 			}
+
+			// Extract images
+			tempDir, err := os.MkdirTemp("", "kb_pdf_images_*")
+			if err != nil {
+				c.logger.Warn("Failed to create temporary directory for PDF images", "error", err)
+			} else {
+				tempDirsToClean = append(tempDirsToClean, tempDir)
+				c.mu.Lock()
+				c.pdfTempDirs[p] = tempDir
+				c.mu.Unlock()
+				defer func(path string) {
+					c.mu.Lock()
+					delete(c.pdfTempDirs, path)
+					c.mu.Unlock()
+				}(p)
+
+				c.logger.Info("Extracting embedded images from PDF for multi-doc synthesis", "path", p, "tempDir", tempDir)
+				if err := extractImagesFromPDF(p, tempDir); err != nil {
+					c.logger.Warn("Failed to extract images from PDF", "error", err)
+				} else {
+					// Catalog images
+					entries, err := os.ReadDir(tempDir)
+					if err == nil {
+						var imgNames []string
+						for _, entry := range entries {
+							if !entry.IsDir() {
+								name := entry.Name()
+								ext := strings.ToLower(filepath.Ext(name))
+								if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" || ext == ".gif" {
+									imgNames = append(imgNames, name)
+								}
+							}
+						}
+						if len(imgNames) > 0 {
+							captions, _ := c.captionImages(imgNames, tempDir)
+
+							var sb strings.Builder
+							sb.WriteString(pdfText)
+							sb.WriteString("\n\n---\n")
+							sb.WriteString("AVAILABLE EMBEDDED IMAGES FOR ")
+							sb.WriteString(filepath.Base(p))
+							sb.WriteString(":\n")
+							sb.WriteString("If relevant to the article content, you must reference them in the body using the standard Obsidian image syntax: `![[image_name]]` (e.g. `![[page_001_R1.png]]` or whatever the original name from the list below is).\n")
+							sb.WriteString("Do NOT invent other names. Only reference the exact filenames listed below, and only when they are directly relevant to the text of the compiled wiki page.\n")
+							sb.WriteString("Extracted image files:\n")
+							for _, name := range imgNames {
+								sb.WriteString("- ")
+								sb.WriteString(name)
+								if desc, ok := captions[name]; ok && desc != "" {
+									sb.WriteString(" (Description: ")
+									sb.WriteString(desc)
+									sb.WriteString(")")
+								}
+								sb.WriteString("\n")
+							}
+							pdfText = sb.String()
+							c.logger.Info("Discovered and cataloged embedded images in PDF for multi-doc synthesis", "path", p, "count", len(imgNames), "names", imgNames)
+						}
+					}
+				}
+			}
+
 			contentStr = pdfText
 			isCompiled = false // PDFs cannot be marked compiled in-place
 		} else {
@@ -605,6 +745,7 @@ func (c *Compiler) CompileMulti(sourcePaths []string, force bool) error {
 	}
 
 	normalizedBody := c.normalizeLinks(res.Body)
+	normalizedBody = c.processAndCopyImages(normalizedBody, sourcePaths, slug)
 	wikiContent, err := frontmatter.Marshal(wf, normalizedBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal wiki frontmatter: %w", err)
@@ -667,6 +808,7 @@ func (c *Compiler) writeWikiArticle(sourcePath string, sf *frontmatter.SourceFro
 	}
 
 	normalizedBody := c.normalizeLinks(res.Body)
+	normalizedBody = c.processAndCopyImages(normalizedBody, []string{sourcePath}, slug)
 	wikiContent, err := frontmatter.Marshal(wf, normalizedBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal wiki frontmatter: %w", err)
@@ -1268,6 +1410,7 @@ func (c *Compiler) compileExpand(sourcePath string, sf *frontmatter.SourceFrontm
 		CompiledFrom: filepath.Base(sourcePath),
 	}
 
+	res.Body = c.processAndCopyImages(res.Body, []string{sourcePath}, targetSlug)
 	wikiContent, err := frontmatter.Marshal(wf, res.Body)
 	if err != nil {
 		return fmt.Errorf("failed to marshal expanded wiki frontmatter: %w", err)
@@ -1536,6 +1679,7 @@ func (c *Compiler) compileSynthesizeAndSplit(sourcePath string, sf *frontmatter.
 		}
 
 		normalizedBody := c.normalizeLinks(spokeRes.Body)
+		normalizedBody = c.processAndCopyImages(normalizedBody, []string{sourcePath}, spokeSlug)
 		spokeWikiContent, err := frontmatter.Marshal(spokeWf, normalizedBody)
 		if err != nil {
 			return fmt.Errorf("failed to marshal Spoke wiki frontmatter: %w", err)
@@ -1668,6 +1812,7 @@ func (c *Compiler) compileSynthesizeAndSplit(sourcePath string, sf *frontmatter.
 	}
 
 	normalizedHubBody := c.normalizeLinks(hubRes.Body)
+	normalizedHubBody = c.processAndCopyImages(normalizedHubBody, []string{sourcePath}, targetSlug)
 	hubWikiContent, err := frontmatter.Marshal(hubWf, normalizedHubBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal synthesized Hub wiki frontmatter: %w", err)
@@ -1873,4 +2018,330 @@ func readPDFText(path string) (string, error) {
 		return "", fmt.Errorf("failed to read plain text from PDF: %w", err)
 	}
 	return buf.String(), nil
+}
+
+// processAndCopyImages scans the compiled markdown body for image references (Markdown and Obsidian format),
+// resolves them against the directories of sourcePaths, copies them to the media/ directory, and rewrites the links.
+func (c *Compiler) processAndCopyImages(body string, sourcePaths []string, destSlug string) string {
+	if len(sourcePaths) == 0 || body == "" {
+		return body
+	}
+
+	fileExists := func(path string) bool {
+		info, err := os.Stat(path)
+		return err == nil && !info.IsDir()
+	}
+
+	copyFile := func(src, dst string) error {
+		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, data, 0644)
+	}
+
+	mediaDir := vault.MediaDir(c.cfg)
+	mdImageRegex := regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+	obsImageRegex := regexp.MustCompile(`!\[\[([^\]|#]+)(#[^\]|]*)?(\|[^\]]*)?\]\]`)
+
+	// Process Obsidian image embeds
+	body = obsImageRegex.ReplaceAllStringFunc(body, func(match string) string {
+		submatches := obsImageRegex.FindStringSubmatch(match)
+		if len(submatches) < 2 {
+			return match
+		}
+
+		imgPath := strings.TrimSpace(submatches[1])
+		header := submatches[2]
+		alias := submatches[3]
+
+		// Ignore remote images
+		if strings.HasPrefix(strings.ToLower(imgPath), "http://") || strings.HasPrefix(strings.ToLower(imgPath), "https://") {
+			return match
+		}
+
+		var srcImgPath string
+		found := false
+		for _, sp := range sourcePaths {
+			sourceDir := filepath.Dir(sp)
+			candidate := filepath.Join(sourceDir, imgPath)
+			if fileExists(candidate) {
+				srcImgPath = candidate
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			for _, sp := range sourcePaths {
+				c.mu.Lock()
+				tempDir, ok := c.pdfTempDirs[sp]
+				c.mu.Unlock()
+				if ok && tempDir != "" {
+					candidate := filepath.Join(tempDir, filepath.Base(imgPath))
+					if fileExists(candidate) {
+						srcImgPath = candidate
+						found = true
+						break
+					}
+				}
+			}
+		}
+
+		if !found {
+			c.logger.Warn("Referenced image not found in any source directories or temporary PDF image caches", "imagePath", imgPath)
+			return match
+		}
+
+		baseName := filepath.Base(srcImgPath)
+		destFilename := fmt.Sprintf("%s_%s", destSlug, baseName)
+		dstImgPath := filepath.Join(mediaDir, destFilename)
+
+		c.logger.Info("Copying local image asset to media directory", "src", srcImgPath, "dst", dstImgPath)
+		if err := copyFile(srcImgPath, dstImgPath); err != nil {
+			c.logger.Error("Failed to copy image asset", "src", srcImgPath, "dst", dstImgPath, "error", err)
+			return match
+		}
+
+		newPath := "media/" + destFilename
+		return fmt.Sprintf("![[%s%s%s]]", newPath, header, alias)
+	})
+
+	// Process standard Markdown images
+	body = mdImageRegex.ReplaceAllStringFunc(body, func(match string) string {
+		submatches := mdImageRegex.FindStringSubmatch(match)
+		if len(submatches) < 3 {
+			return match
+		}
+
+		altText := submatches[1]
+		imgPath := strings.TrimSpace(submatches[2])
+
+		// Ignore remote images
+		if strings.HasPrefix(strings.ToLower(imgPath), "http://") || strings.HasPrefix(strings.ToLower(imgPath), "https://") {
+			return match
+		}
+
+		var srcImgPath string
+		found := false
+		for _, sp := range sourcePaths {
+			sourceDir := filepath.Dir(sp)
+			candidate := filepath.Join(sourceDir, imgPath)
+			if fileExists(candidate) {
+				srcImgPath = candidate
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			for _, sp := range sourcePaths {
+				c.mu.Lock()
+				tempDir, ok := c.pdfTempDirs[sp]
+				c.mu.Unlock()
+				if ok && tempDir != "" {
+					candidate := filepath.Join(tempDir, filepath.Base(imgPath))
+					if fileExists(candidate) {
+						srcImgPath = candidate
+						found = true
+						break
+					}
+				}
+			}
+		}
+
+		if !found {
+			c.logger.Warn("Referenced image not found in any source directories or temporary PDF image caches", "imagePath", imgPath)
+			return match
+		}
+
+		baseName := filepath.Base(srcImgPath)
+		destFilename := fmt.Sprintf("%s_%s", destSlug, baseName)
+		dstImgPath := filepath.Join(mediaDir, destFilename)
+
+		c.logger.Info("Copying local image asset to media directory", "src", srcImgPath, "dst", dstImgPath)
+		if err := copyFile(srcImgPath, dstImgPath); err != nil {
+			c.logger.Error("Failed to copy image asset", "src", srcImgPath, "dst", dstImgPath, "error", err)
+			return match
+		}
+
+		newPath := "media/" + destFilename
+		return fmt.Sprintf("![%s](%s)", altText, newPath)
+	})
+
+	return body
+}
+
+// extractImagesFromPDF extracts all embedded images from the PDF using pdfcpu.
+func extractImagesFromPDF(pdfPath, destDir string) error {
+	conf := model.NewDefaultConfiguration()
+	conf.ValidationMode = model.ValidationRelaxed
+	err := api.ExtractImagesFile(pdfPath, destDir, nil, conf)
+	if err != nil {
+		return fmt.Errorf("pdfcpu image extraction: %w", err)
+	}
+	return nil
+}
+
+// captionImages batches image files, calls Gemini vision to describe them, and updates the hash cache.
+func (c *Compiler) captionImages(imageFiles []string, tempDir string) (map[string]string, error) {
+	descriptions := make(map[string]string)
+	if len(imageFiles) == 0 {
+		return descriptions, nil
+	}
+
+	// 1. Calculate hashes and resolve already cached descriptions
+	var uncachedFiles []string
+	var uncachedHashes []string
+	hashes := make(map[string]string) // file path -> SHA-256 hash
+
+	for _, file := range imageFiles {
+		filePath := filepath.Join(tempDir, file)
+		h, err := ComputeSHA256(filePath)
+		if err != nil {
+			c.logger.Warn("Failed to compute SHA-256 hash for image", "file", file, "error", err)
+			continue
+		}
+		hashes[file] = h
+
+		if desc, ok := c.imageCache.Get(h); ok {
+			descriptions[file] = desc
+		} else {
+			uncachedFiles = append(uncachedFiles, file)
+			uncachedHashes = append(uncachedHashes, h)
+		}
+	}
+
+	if len(uncachedFiles) == 0 {
+		c.logger.Debug("All PDF images resolved from cache", "count", len(imageFiles))
+		return descriptions, nil
+	}
+
+	c.logger.Info("Starting multimodal captioning for uncached images", "total", len(imageFiles), "uncached", len(uncachedFiles))
+
+	// Get image caption model from config/env
+	captionModel := os.Getenv("IMAGE_CAPTION_MODEL")
+	if captionModel == "" {
+		captionModel = "gemini-2.5-flash"
+	}
+
+	// 2. Batch uncached images (e.g. max 8 at a time)
+	batchSize := 8
+	for i := 0; i < len(uncachedFiles); i += batchSize {
+		end := i + batchSize
+		if end > len(uncachedFiles) {
+			end = len(uncachedFiles)
+		}
+
+		batchFiles := uncachedFiles[i:end]
+		batchHashes := uncachedHashes[i:end]
+
+		c.logger.Info("Processing image captioning batch", "start", i, "end", end, "model", captionModel)
+
+		// Prepare prompt and file contents
+		var promptBuilder strings.Builder
+		promptBuilder.WriteString("Describe each of the following images in 1 to 2 sentences, focusing on the diagrams, charts, formulas, or key subjects depicted.\n")
+		promptBuilder.WriteString("Return a JSON object where the keys are the EXACT filenames provided and the values are their descriptions. Example:\n")
+		promptBuilder.WriteString("{\n")
+		for idx, fn := range batchFiles {
+			promptBuilder.WriteString(fmt.Sprintf("  %q: %q", fn, "Description of the image..."))
+			if idx < len(batchFiles)-1 {
+				promptBuilder.WriteString(",")
+			}
+			promptBuilder.WriteString("\n")
+		}
+		promptBuilder.WriteString("}\n")
+		promptBuilder.WriteString("Do NOT output any markdown blocks or wrapping outside of the valid raw JSON object. Return ONLY raw JSON.")
+
+		var imagesData [][]byte
+		var mimeTypes []string
+
+		for _, file := range batchFiles {
+			filePath := filepath.Join(tempDir, file)
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				c.logger.Warn("Failed to read image for batch captioning", "file", file, "error", err)
+				continue
+			}
+			imagesData = append(imagesData, data)
+
+			ext := strings.ToLower(filepath.Ext(file))
+			mime := "image/png"
+			if ext == ".jpg" || ext == ".jpeg" {
+				mime = "image/jpeg"
+			} else if ext == ".webp" {
+				mime = "image/webp"
+			} else if ext == ".gif" {
+				mime = "image/gif"
+			}
+			mimeTypes = append(mimeTypes, mime)
+		}
+
+		if len(imagesData) == 0 {
+			continue
+		}
+
+		// Call multimodal API
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		var respStr string
+		var err error
+
+		if mp, ok := c.provider.(provider.MultimodalProvider); ok {
+			respStr, err = mp.GenerateMultimodal(ctx, captionModel, promptBuilder.String(), imagesData, mimeTypes)
+		} else {
+			err = fmt.Errorf("provider does not support GenerateMultimodal")
+		}
+		cancel()
+
+		if err != nil {
+			c.logger.Warn("Failed to generate multimodal image captions for batch", "error", err)
+			continue
+		}
+
+		// Clean JSON response
+		respStr = strings.TrimSpace(respStr)
+		if strings.HasPrefix(respStr, "```") {
+			// Strip markdown fences
+			lines := strings.Split(respStr, "\n")
+			var filtered []string
+			for _, line := range lines {
+				if !strings.HasPrefix(line, "```") {
+					filtered = append(filtered, line)
+				}
+			}
+			respStr = strings.Join(filtered, "\n")
+		}
+
+		// Parse JSON response
+		var parsedCaptions map[string]string
+		if err := json.Unmarshal([]byte(respStr), &parsedCaptions); err != nil {
+			c.logger.Warn("Failed to parse image captions JSON response", "response", respStr, "error", err)
+			// fallback attempt: try robust extraction
+			parsedCaptions = make(map[string]string)
+			for _, fn := range batchFiles {
+				val := extractFieldRobustly(respStr, fn)
+				if val != "" {
+					parsedCaptions[fn] = val
+				}
+			}
+		}
+
+		// Save results to cache and return maps
+		for idx, fn := range batchFiles {
+			desc, ok := parsedCaptions[fn]
+			if ok && desc != "" {
+				descriptions[fn] = desc
+				c.imageCache.Set(batchHashes[idx], desc)
+			} else {
+				c.logger.Warn("No description generated for file in batch", "file", fn)
+			}
+		}
+
+		_ = c.imageCache.Save()
+	}
+
+	return descriptions, nil
 }

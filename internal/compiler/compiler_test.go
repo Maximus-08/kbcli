@@ -274,3 +274,283 @@ func TestCompilerFunctional(t *testing.T) {
 		}
 	})
 }
+
+func TestProcessAndCopyImages(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "kb_image_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create directories
+	rawDir := filepath.Join(tempDir, "sources", "raw")
+	wikiDir := filepath.Join(tempDir, "wiki")
+	mediaDir := filepath.Join(tempDir, "wiki", "media")
+	_ = os.MkdirAll(rawDir, 0755)
+	_ = os.MkdirAll(wikiDir, 0755)
+	_ = os.MkdirAll(mediaDir, 0755)
+
+	cfg := &config.Config{
+		VaultKBPath: tempDir,
+	}
+
+	// Create dummy image file in rawDir
+	imgName := "diagram.png"
+	imgPath := filepath.Join(rawDir, imgName)
+	imgData := []byte("fake-image-bytes")
+	if err := os.WriteFile(imgPath, imgData, 0644); err != nil {
+		t.Fatalf("failed to write dummy image file: %v", err)
+	}
+
+	// Create dummy markdown file referencing the image
+	mdPath := filepath.Join(rawDir, "note.md")
+
+	c := New(cfg, &MockProvider{}, slog.Default())
+
+	// Test Obsidian style and Markdown style image embeds
+	body := "Here is Obsidian: ![[diagram.png|300]] and Markdown: ![Alt Text](diagram.png)"
+	destSlug := "test-slug"
+	rewritten := c.processAndCopyImages(body, []string{mdPath}, destSlug)
+
+	expectedObsidian := "![[media/test-slug_diagram.png|300]]"
+	expectedMarkdown := "![Alt Text](media/test-slug_diagram.png)"
+
+	if !strings.Contains(rewritten, expectedObsidian) {
+		t.Errorf("expected rewritten body to contain %q, got %q", expectedObsidian, rewritten)
+	}
+	if !strings.Contains(rewritten, expectedMarkdown) {
+		t.Errorf("expected rewritten body to contain %q, got %q", expectedMarkdown, rewritten)
+	}
+
+	// Verify the image was copied to mediaDir
+	copiedImgPath := filepath.Join(mediaDir, "test-slug_diagram.png")
+	copiedData, err := os.ReadFile(copiedImgPath)
+	if err != nil {
+		t.Fatalf("expected copied image to exist at %s, got error: %v", copiedImgPath, err)
+	}
+
+	if string(copiedData) != string(imgData) {
+		t.Errorf("copied image data mismatch; got %q, want %q", string(copiedData), string(imgData))
+	}
+}
+
+func TestPDFImageExtraction(t *testing.T) {
+	pdfPath := "/mnt/c/ML/sources/raw/cheatsheet-convolutional-neural-networks.pdf"
+	if _, err := os.Stat(pdfPath); os.IsNotExist(err) {
+		t.Skip("Skipping PDF image extraction test because cheatsheet-convolutional-neural-networks.pdf is not available")
+	}
+
+	tempDir, err := os.MkdirTemp("", "kb_pdf_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create directories
+	rawDir := filepath.Join(tempDir, "sources", "raw")
+	wikiDir := filepath.Join(tempDir, "wiki")
+	mediaDir := filepath.Join(tempDir, "wiki", "media")
+	_ = os.MkdirAll(rawDir, 0755)
+	_ = os.MkdirAll(wikiDir, 0755)
+	_ = os.MkdirAll(mediaDir, 0755)
+
+	cfg := &config.Config{
+		VaultKBPath:        tempDir,
+		CompileModelSingle: "test-model-single",
+		LogLevel:           "error",
+	}
+
+	// Copy PDF to rawDir
+	testPDFPath := filepath.Join(rawDir, "cheatsheet.pdf")
+	pdfBytes, err := os.ReadFile(pdfPath)
+	if err != nil {
+		t.Fatalf("failed to read test PDF: %v", err)
+	}
+	if err := os.WriteFile(testPDFPath, pdfBytes, 0644); err != nil {
+		t.Fatalf("failed to write test PDF to raw: %v", err)
+	}
+
+	var calledPrompt string
+	mockProvider := &MockProvider{
+		GenerateFunc: func(ctx context.Context, model string, prompt string) (string, error) {
+			calledPrompt = prompt
+
+			// Find an image name in prompt
+			imgName := "nonexistent.png"
+			lines := strings.Split(prompt, "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "- ") {
+					imgName = strings.TrimSpace(line[2:])
+					break
+				}
+			}
+
+			// Return a body referencing the extracted image
+			return `{
+				"title": "CNN Cheatsheet Compiled",
+				"summary": "Convolutional Neural Networks cheatsheet content",
+				"category": "Deep-Learning",
+				"tags": ["cnn", "deep-learning"],
+				"sources": ["sources/raw/cheatsheet.pdf"],
+				"body": "This cheatsheet details CNN architectures. Here is a diagram: ![[` + imgName + `]]."
+			}`, nil
+		},
+	}
+
+	c := New(cfg, mockProvider, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+
+	// Run CompileSingle
+	err = c.CompileSingle(testPDFPath, false, false)
+	if err != nil {
+		t.Fatalf("CompileSingle failed: %v", err)
+	}
+
+	// Check if prompt had the AVAILABLE EMBEDDED IMAGES list
+	if !strings.Contains(calledPrompt, "AVAILABLE EMBEDDED IMAGES:") {
+		t.Errorf("expected prompt to contain image catalog, but it did not.")
+	}
+
+	// Verify that the images tempDir was cleaned up (not in compiler's maps)
+	c.mu.Lock()
+	tempDirsLen := len(c.pdfTempDirs)
+	c.mu.Unlock()
+	if tempDirsLen != 0 {
+		t.Errorf("expected pdfTempDirs map to be empty, got size: %d", tempDirsLen)
+	}
+
+	// Extract the first image file name from prompt to verify it was copied
+	imgName := ""
+	lines := strings.Split(calledPrompt, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "- ") {
+			imgName = strings.TrimSpace(line[2:])
+			break
+		}
+	}
+
+	if imgName == "" {
+		t.Fatalf("No image names found in LLM prompt")
+	}
+
+	// Verify the image was copied to mediaDir and compiled markdown rewritten correctly
+	destSlug := "cnn-cheatsheet-compiled"
+	copiedImgPath := filepath.Join(mediaDir, destSlug+"_"+imgName)
+	if _, err := os.Stat(copiedImgPath); os.IsNotExist(err) {
+		t.Errorf("expected copied image to exist at %s, but it does not", copiedImgPath)
+	}
+
+	wikiFile := filepath.Join(wikiDir, destSlug+".md")
+	wikiBytes, err := os.ReadFile(wikiFile)
+	if err != nil {
+		t.Fatalf("failed to read compiled wiki file: %v", err)
+	}
+	expectedEmbed := "![[media/" + destSlug + "_" + imgName + "]]"
+	if !strings.Contains(string(wikiBytes), expectedEmbed) {
+		t.Errorf("expected wiki file to contain %q, got: %s", expectedEmbed, string(wikiBytes))
+	}
+}
+
+type MockMultimodalProvider struct {
+	MockProvider
+	GenerateMultimodalFunc func(ctx context.Context, model string, prompt string, images [][]byte, mimeTypes []string) (string, error)
+}
+
+func (m *MockMultimodalProvider) GenerateMultimodal(ctx context.Context, model string, prompt string, images [][]byte, mimeTypes []string) (string, error) {
+	if m.GenerateMultimodalFunc != nil {
+		return m.GenerateMultimodalFunc(ctx, model, prompt, images, mimeTypes)
+	}
+	return "{}", nil
+}
+
+func TestImageCache(t *testing.T) {
+	tempFile, err := os.CreateTemp("", "image_cache_*.json")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	tempPath := tempFile.Name()
+	tempFile.Close()
+	defer os.Remove(tempPath)
+
+	ic := NewImageCache(tempPath)
+	ic.Set("hash1", "description 1")
+	if err := ic.Save(); err != nil {
+		t.Fatalf("failed to save cache: %v", err)
+	}
+
+	ic2 := NewImageCache(tempPath)
+	desc, ok := ic2.Get("hash1")
+	if !ok || desc != "description 1" {
+		t.Errorf("expected 'description 1', got %q (ok=%v)", desc, ok)
+	}
+}
+
+func TestCaptionImages(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "kb_caption_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create dummy image file
+	imgName := "image1.png"
+	imgPath := filepath.Join(tempDir, imgName)
+	if err := os.WriteFile(imgPath, []byte("fake-image-bytes-1"), 0644); err != nil {
+		t.Fatalf("failed to write dummy image: %v", err)
+	}
+
+	cfg := &config.Config{
+		VaultKBPath: tempDir,
+	}
+
+	calledMultimodal := false
+	mockProvider := &MockMultimodalProvider{
+		MockProvider: MockProvider{},
+		GenerateMultimodalFunc: func(ctx context.Context, model string, prompt string, images [][]byte, mimeTypes []string) (string, error) {
+			calledMultimodal = true
+			if model != "gemini-2.5-flash" {
+				t.Errorf("expected model 'gemini-2.5-flash', got %q", model)
+			}
+			// Return valid JSON mapping
+			return `{"image1.png": "A simple blue square"}`, nil
+		},
+	}
+
+	c := New(cfg, mockProvider, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+
+	// Run captionImages
+	captions, err := c.captionImages([]string{imgName}, tempDir)
+	if err != nil {
+		t.Fatalf("captionImages failed: %v", err)
+	}
+
+	if !calledMultimodal {
+		t.Errorf("expected GenerateMultimodal to be called, but it was not")
+	}
+
+	desc, ok := captions[imgName]
+	if !ok || desc != "A simple blue square" {
+		t.Errorf("expected description 'A simple blue square', got %q", desc)
+	}
+
+	// Verify it was cached
+	h, _ := ComputeSHA256(imgPath)
+	cachedDesc, ok := c.imageCache.Get(h)
+	if !ok || cachedDesc != "A simple blue square" {
+		t.Errorf("expected description in cache to be 'A simple blue square', got %q", cachedDesc)
+	}
+
+	// Run again. Multimodal provider should NOT be called because it is cached!
+	calledMultimodal = false
+	captions2, err := c.captionImages([]string{imgName}, tempDir)
+	if err != nil {
+		t.Fatalf("second captionImages failed: %v", err)
+	}
+
+	if calledMultimodal {
+		t.Errorf("expected GenerateMultimodal NOT to be called on second run (cached), but it was")
+	}
+
+	if captions2[imgName] != "A simple blue square" {
+		t.Errorf("expected cached description, got: %s", captions2[imgName])
+	}
+}

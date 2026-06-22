@@ -16,6 +16,11 @@ type Provider interface {
 	Available(ctx context.Context) (bool, error)
 }
 
+type MultimodalProvider interface {
+	Provider
+	GenerateMultimodal(ctx context.Context, model string, prompt string, images [][]byte, mimeTypes []string) (string, error)
+}
+
 type SmartRouter struct {
 	gemini     Provider
 	openRouter Provider
@@ -161,6 +166,13 @@ func (s *SmartRouter) Generate(ctx context.Context, model string, prompt string)
 	}
 
 	return "", fmt.Errorf("all providers in the fallback chain failed. Last error: %w", lastErr)
+}
+
+func (s *SmartRouter) GenerateMultimodal(ctx context.Context, model string, prompt string, images [][]byte, mimeTypes []string) (string, error) {
+	if mp, ok := s.gemini.(MultimodalProvider); ok {
+		return mp.GenerateMultimodal(ctx, model, prompt, images, mimeTypes)
+	}
+	return "", fmt.Errorf("gemini provider does not support multimodal operations")
 }
 
 func isConfigured(p Provider) bool {
