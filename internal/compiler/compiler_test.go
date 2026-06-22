@@ -307,19 +307,23 @@ func TestProcessAndCopyImages(t *testing.T) {
 
 	c := New(cfg, &MockProvider{}, slog.Default())
 
-	// Test Obsidian style and Markdown style image embeds
-	body := "Here is Obsidian: ![[diagram.png|300]] and Markdown: ![Alt Text](diagram.png)"
+	// Test Obsidian style, Markdown style, and no-extension image embeds
+	body := "Here is Obsidian: ![[diagram.png|300]] and Markdown: ![Alt Text](diagram.png) and NoExt: ![[diagram]]"
 	destSlug := "test-slug"
 	rewritten := c.processAndCopyImages(body, []string{mdPath}, destSlug)
 
 	expectedObsidian := "![[media/test-slug_diagram.png|300]]"
 	expectedMarkdown := "![Alt Text](media/test-slug_diagram.png)"
+	expectedNoExt := "![[media/test-slug_diagram.png]]"
 
 	if !strings.Contains(rewritten, expectedObsidian) {
 		t.Errorf("expected rewritten body to contain %q, got %q", expectedObsidian, rewritten)
 	}
 	if !strings.Contains(rewritten, expectedMarkdown) {
 		t.Errorf("expected rewritten body to contain %q, got %q", expectedMarkdown, rewritten)
+	}
+	if !strings.Contains(rewritten, expectedNoExt) {
+		t.Errorf("expected rewritten body to contain %q, got %q", expectedNoExt, rewritten)
 	}
 
 	// Verify the image was copied to mediaDir
@@ -552,5 +556,112 @@ func TestCaptionImages(t *testing.T) {
 
 	if captions2[imgName] != "A simple blue square" {
 		t.Errorf("expected cached description, got: %s", captions2[imgName])
+	}
+}
+
+func TestResolveCollisionCandidateReuse(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "kb_collision_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	wikiDir := filepath.Join(tempDir, "wiki")
+	_ = os.MkdirAll(wikiDir, 0755)
+
+	cfg := &config.Config{
+		VaultKBPath: tempDir,
+	}
+
+	c := New(cfg, &MockProvider{}, slog.Default())
+
+	// Create a collision. Write "wiki/collision-test.md" compiled from "first.md"
+	firstWikiPath := filepath.Join(wikiDir, "collision-test.md")
+	firstContent := "---\ntitle: Collision Test\ncompiled_from: first.md\n---\nBody 1"
+	_ = os.WriteFile(firstWikiPath, []byte(firstContent), 0644)
+
+	// Write "wiki/collision-test-2.md" compiled from "second.md"
+	secondWikiPath := filepath.Join(wikiDir, "collision-test-2.md")
+	secondContent := "---\ntitle: Collision Test 2\ncompiled_from: second.md\n---\nBody 2"
+	_ = os.WriteFile(secondWikiPath, []byte(secondContent), 0644)
+
+	// 1. Check resolveCollision with "first.md". It should return "collision-test" since it matches firstWiki's CompiledFrom.
+	slug1 := c.resolveCollision("collision-test", "sources/raw/first.md")
+	if slug1 != "collision-test" {
+		t.Errorf("expected 'collision-test', got %q", slug1)
+	}
+
+	// 2. Check resolveCollision with "second.md". It should return "collision-test-2" since it matches secondWiki's CompiledFrom.
+	slug2 := c.resolveCollision("collision-test", "sources/raw/second.md")
+	if slug2 != "collision-test-2" {
+		t.Errorf("expected 'collision-test-2', got %q", slug2)
+	}
+
+	// 3. Check resolveCollision with "third.md". It should return "collision-test-3" since it doesn't match either,
+	// and collision-test-3.md does not exist yet.
+	slug3 := c.resolveCollision("collision-test", "sources/raw/third.md")
+	if slug3 != "collision-test-3" {
+		t.Errorf("expected 'collision-test-3', got %q", slug3)
+	}
+}
+
+func TestCleanupOldCompilationProducts(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "kb_cleanup_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	wikiDir := filepath.Join(tempDir, "wiki")
+	_ = os.MkdirAll(wikiDir, 0755)
+
+	cfg := &config.Config{
+		VaultKBPath: tempDir,
+	}
+
+	c := New(cfg, &MockProvider{}, slog.Default())
+
+	// Write three files compiled from "source.pdf"
+	_ = os.WriteFile(filepath.Join(wikiDir, "spoke-1.md"), []byte("---\ntitle: Spoke 1\ncompiled_from: source.pdf\n---\nBody 1"), 0644)
+	_ = os.WriteFile(filepath.Join(wikiDir, "spoke-2.md"), []byte("---\ntitle: Spoke 2\ncompiled_from: source.pdf\n---\nBody 2"), 0644)
+	_ = os.WriteFile(filepath.Join(wikiDir, "hub.md"), []byte("---\ntitle: Hub\ncompiled_from: source.pdf\n---\nBody Hub"), 0644)
+
+	// Write one file compiled from "another.pdf" (should NOT be cleaned up)
+	_ = os.WriteFile(filepath.Join(wikiDir, "other.md"), []byte("---\ntitle: Other\ncompiled_from: another.pdf\n---\nBody Other"), 0644)
+
+	// Write INDEX.md and populate it
+	indexPath := filepath.Join(wikiDir, "INDEX.md")
+	_ = os.WriteFile(indexPath, []byte("# INDEX\n\n- [[spoke-1]] — Spoke 1\n- [[spoke-2]] — Spoke 2\n- [[hub]] — Hub\n- [[other]] — Other\n"), 0644)
+
+	// Run cleanup, keeping only "spoke-1" and "hub"
+	err = c.cleanupOldCompilationProducts("sources/raw/source.pdf", []string{"spoke-1", "hub"})
+	if err != nil {
+		t.Fatalf("cleanupOldCompilationProducts failed: %v", err)
+	}
+
+	// spoke-2 should be trashed. spoke-1, hub, and other should remain.
+	if _, err := os.Stat(filepath.Join(wikiDir, "spoke-2.md")); !os.IsNotExist(err) {
+		t.Errorf("expected spoke-2.md to be cleaned up/trashed, but it still exists")
+	}
+	if _, err := os.Stat(filepath.Join(wikiDir, "spoke-1.md")); err != nil {
+		t.Errorf("expected spoke-1.md to remain, got error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wikiDir, "hub.md")); err != nil {
+		t.Errorf("expected hub.md to remain, got error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wikiDir, "other.md")); err != nil {
+		t.Errorf("expected other.md to remain, got error: %v", err)
+	}
+
+	// INDEX.md should be updated, so spoke-2 should not be there anymore
+	indexEntries, err := index.Read(indexPath)
+	if err != nil {
+		t.Fatalf("failed to read index: %v", err)
+	}
+
+	for _, entry := range indexEntries {
+		if strings.EqualFold(entry.Slug, "spoke-2") {
+			t.Errorf("expected spoke-2 to be removed from INDEX.md, but it is still present")
+		}
 	}
 }

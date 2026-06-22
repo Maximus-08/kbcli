@@ -11,6 +11,7 @@ Instructions:
 3. If it contains multiple distinct, deeply technical concepts, mathematical formulations, or sections that would suffer from information loss or heavy summarizing if forced into a single page, set "split_required" to true.
 4. If it is short, simple, or contains only a single tightly-knit concept that cannot be split naturally, set "split_required" to false.
 5. If split_required is true:
+   - Define "hub_title": A concise, clear topic-centered title for the main overview Hub article (e.g. "Quantum Convolutional Neural Networks").
    - Identify 2-6 distinct, atomic, and complete sub-topics.
    - For each sub-topic, define:
      - "slug": A clean, simple, lowercase alphanumeric slug (e.g. `quanvolutional-layer`, `quantum-pooling`). Do NOT prefix it with the hub slug.
@@ -26,6 +27,7 @@ Response Schema:
 ```json
 {
   "split_required": true,
+  "hub_title": "Clear Topic-Centered Hub Title",
   "articles": [
     {
       "slug": "atomic-subtopic-slug",

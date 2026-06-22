@@ -258,10 +258,13 @@ func (c *Compiler) CompileSingle(sourcePath string, force bool, split bool) erro
 
 		res, err := parseJSONResponse(llmResp, c.logger)
 		if err == nil && res.Title != "" && res.Summary != "" && res.Body != "" {
-			// Success! Make slug and handle collision based on LLM-generated title
 			slug := vault.MakeSlug(res.Title)
 			slug = c.resolveCollision(slug, sourcePath)
-			return c.writeWikiArticle(sourcePath, sf, body, res, slug)
+			err := c.writeWikiArticle(sourcePath, sf, body, res, slug)
+			if err == nil {
+				_ = c.cleanupOldCompilationProducts(sourcePath, []string{slug})
+			}
+			return err
 		}
 
 		c.logger.Warn("Received malformed JSON from model, retrying", "attempt", attempt, "error", err)
@@ -272,6 +275,7 @@ func (c *Compiler) CompileSingle(sourcePath string, force bool, split bool) erro
 
 type splitPlan struct {
 	SplitRequired bool           `json:"split_required"`
+	HubTitle      string         `json:"hub_title"`
 	Articles      []splitArticle `json:"articles"`
 }
 
@@ -356,6 +360,13 @@ func (c *Compiler) compileSingleWithSplit(sourcePath string, sf *frontmatter.Sou
 
 	c.logger.Info("Split compilation plan generated successfully", "articlesCount", len(plan.Articles))
 
+	// Pre-determine Hub slug to link spokes back to it
+	hubSlug := vault.MakeSlug(plan.HubTitle)
+	if hubSlug == "" {
+		hubSlug = vault.MakeSlug(sf.Title)
+	}
+	hubSlug = c.resolveCollision(hubSlug, sourcePath)
+
 	// Compile Spokes
 	var compiledSpokes []splitArticle
 	for _, spoke := range plan.Articles {
@@ -373,13 +384,18 @@ func (c *Compiler) compileSingleWithSplit(sourcePath string, sf *frontmatter.Sou
 			return fmt.Errorf("failed to parse compile spoke template: %w", err)
 		}
 
+		spokeDependentLinks := append([]string{}, spoke.DependentSlugs...)
+		if hubSlug != "" {
+			spokeDependentLinks = append(spokeDependentLinks, hubSlug)
+		}
+
 		var spokeBuf bytes.Buffer
 		err = spokeTmpl.Execute(&spokeBuf, map[string]any{
 			"SourceContent":     string(content),
 			"SpokeTitle":        spoke.Title,
 			"SpokeSummary":      spoke.Summary,
 			"SpokeInstructions": spoke.Instructions,
-			"DependentLinks":    spoke.DependentSlugs,
+			"DependentLinks":    spokeDependentLinks,
 			"ExistingArticles":  existingArticlesStr,
 		})
 		if err != nil {
@@ -422,7 +438,7 @@ func (c *Compiler) compileSingleWithSplit(sourcePath string, sf *frontmatter.Sou
 			Provenance:   spokeRes.Provenance,
 			Summary:      spokeRes.Summary,
 			CompiledFrom: filepath.Base(sourcePath),
-			Related:      spoke.DependentSlugs,
+			Related:      append(spoke.DependentSlugs, hubSlug),
 		}
 
 		normalizedBody := c.normalizeLinks(spokeRes.Body)
@@ -495,9 +511,7 @@ func (c *Compiler) compileSingleWithSplit(sourcePath string, sf *frontmatter.Sou
 		return fmt.Errorf("failed to compile Hub article after 2 attempts")
 	}
 
-	// Hub slug and write
-	hubSlug := vault.MakeSlug(sf.Title)
-	hubSlug = c.resolveCollision(hubSlug, sourcePath)
+	// Hub slug is already pre-determined as hubSlug
 
 	hubWikiPath := vault.WikiFilePath(c.cfg, hubSlug)
 	hubTmpPath := hubWikiPath + ".tmp"
@@ -544,6 +558,13 @@ func (c *Compiler) compileSingleWithSplit(sourcePath string, sf *frontmatter.Sou
 			_ = os.WriteFile(sourcePath, updatedSourceContent, 0644)
 		}
 	}
+
+	// Clean up any obsolete compilation products for this source
+	keptSlugs := []string{hubSlug}
+	for _, spoke := range compiledSpokes {
+		keptSlugs = append(keptSlugs, spoke.Slug)
+	}
+	_ = c.cleanupOldCompilationProducts(sourcePath, keptSlugs)
 
 	c.logger.Info("Split compilation completed successfully", "hubSlug", hubSlug, "spokesCount", len(compiledSpokes))
 	return nil
@@ -924,16 +945,17 @@ func (c *Compiler) resolveCollision(slug string, sourcePath string) string {
 		candidate := fmt.Sprintf("%s-%d", slug, i)
 		candidatePath := vault.WikiFilePath(c.cfg, candidate)
 		if _, err := os.Stat(candidatePath); os.IsNotExist(err) {
-			// Check if this candidate was compiled from the same source file
-			if existingContent, err := os.ReadFile(candidatePath); err == nil {
-				if wf, _, err := frontmatter.ParseWiki(existingContent); err == nil {
-					if (sourcePath != "" && wf.CompiledFrom == filepath.Base(sourcePath)) || (sourcePath == "" && wf.CompiledFrom == "multi-doc") {
-						return candidate
-					}
-				}
-			}
 			c.logger.Warn("Slug collision resolved by appending suffix", "original", slug, "resolved", candidate)
 			return candidate
+		}
+
+		// If candidate file exists, check if it was compiled from the same source file
+		if existingContent, err := os.ReadFile(candidatePath); err == nil {
+			if wf, _, err := frontmatter.ParseWiki(existingContent); err == nil {
+				if (sourcePath != "" && wf.CompiledFrom == filepath.Base(sourcePath)) || (sourcePath == "" && wf.CompiledFrom == "multi-doc") {
+					return candidate
+				}
+			}
 		}
 		i++
 	}
@@ -1110,6 +1132,7 @@ func parseSplitPlanResponse(resp string) (*splitPlan, error) {
 func parseSplitPlanRobustly(jsonStr string) splitPlan {
 	var sp splitPlan
 	sp.SplitRequired = strings.Contains(strings.ToLower(jsonStr), `"split_required"\s*:\s*true`) || strings.Contains(strings.ToLower(jsonStr), `"split_required"\s*:\s*1`)
+	sp.HubTitle = extractFieldRobustly(jsonStr, "hub_title")
 
 	articlesIdx := strings.Index(jsonStr, `"articles"`)
 	if articlesIdx == -1 {
@@ -1844,6 +1867,13 @@ func (c *Compiler) compileSynthesizeAndSplit(sourcePath string, sf *frontmatter.
 		}
 	}
 
+	// Clean up any obsolete compilation products for this source
+	keptSlugs := []string{targetSlug}
+	for _, spoke := range compiledSpokes {
+		keptSlugs = append(keptSlugs, spoke.Slug)
+	}
+	_ = c.cleanupOldCompilationProducts(sourcePath, keptSlugs)
+
 	c.logger.Info("Synthesize-and-Split compilation completed successfully", "hubSlug", targetSlug, "spokesCount", len(compiledSpokes))
 	return nil
 }
@@ -2032,6 +2062,22 @@ func (c *Compiler) processAndCopyImages(body string, sourcePaths []string, destS
 		return err == nil && !info.IsDir()
 	}
 
+	resolvePath := func(dir, name string) (string, bool) {
+		candidate := filepath.Join(dir, name)
+		if fileExists(candidate) {
+			return candidate, true
+		}
+		ext := filepath.Ext(name)
+		if ext == "" {
+			for _, possibleExt := range []string{".png", ".jpg", ".jpeg", ".webp", ".gif"} {
+				if fileExists(candidate + possibleExt) {
+					return candidate + possibleExt, true
+				}
+			}
+		}
+		return "", false
+	}
+
 	copyFile := func(src, dst string) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 			return err
@@ -2067,8 +2113,7 @@ func (c *Compiler) processAndCopyImages(body string, sourcePaths []string, destS
 		found := false
 		for _, sp := range sourcePaths {
 			sourceDir := filepath.Dir(sp)
-			candidate := filepath.Join(sourceDir, imgPath)
-			if fileExists(candidate) {
+			if candidate, ok := resolvePath(sourceDir, imgPath); ok {
 				srcImgPath = candidate
 				found = true
 				break
@@ -2081,8 +2126,7 @@ func (c *Compiler) processAndCopyImages(body string, sourcePaths []string, destS
 				tempDir, ok := c.pdfTempDirs[sp]
 				c.mu.Unlock()
 				if ok && tempDir != "" {
-					candidate := filepath.Join(tempDir, filepath.Base(imgPath))
-					if fileExists(candidate) {
+					if candidate, ok := resolvePath(tempDir, filepath.Base(imgPath)); ok {
 						srcImgPath = candidate
 						found = true
 						break
@@ -2129,8 +2173,7 @@ func (c *Compiler) processAndCopyImages(body string, sourcePaths []string, destS
 		found := false
 		for _, sp := range sourcePaths {
 			sourceDir := filepath.Dir(sp)
-			candidate := filepath.Join(sourceDir, imgPath)
-			if fileExists(candidate) {
+			if candidate, ok := resolvePath(sourceDir, imgPath); ok {
 				srcImgPath = candidate
 				found = true
 				break
@@ -2143,8 +2186,7 @@ func (c *Compiler) processAndCopyImages(body string, sourcePaths []string, destS
 				tempDir, ok := c.pdfTempDirs[sp]
 				c.mu.Unlock()
 				if ok && tempDir != "" {
-					candidate := filepath.Join(tempDir, filepath.Base(imgPath))
-					if fileExists(candidate) {
+					if candidate, ok := resolvePath(tempDir, filepath.Base(imgPath)); ok {
 						srcImgPath = candidate
 						found = true
 						break
@@ -2344,4 +2386,56 @@ func (c *Compiler) captionImages(imageFiles []string, tempDir string) (map[strin
 	}
 
 	return descriptions, nil
+}
+
+func (c *Compiler) cleanupOldCompilationProducts(sourcePath string, keptSlugs []string) error {
+	wikiDir := vault.WikiDir(c.cfg)
+	indexPath := vault.IndexPath(c.cfg)
+
+	keptMap := make(map[string]bool)
+	for _, s := range keptSlugs {
+		keptMap[strings.ToLower(s)] = true
+	}
+
+	entries, err := os.ReadDir(wikiDir)
+	if err != nil {
+		return fmt.Errorf("failed to read wiki directory during cleanup: %w", err)
+	}
+
+	sourceFilename := filepath.Base(sourcePath)
+	for _, entry := range entries {
+		if entry.IsDir() || strings.EqualFold(entry.Name(), "INDEX.md") || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+
+		slug := strings.TrimSuffix(strings.ToLower(entry.Name()), ".md")
+		if keptMap[slug] {
+			continue
+		}
+
+		filePath := filepath.Join(wikiDir, entry.Name())
+		contentBytes, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+
+		wf, _, err := frontmatter.ParseWiki(contentBytes)
+		if err != nil {
+			continue
+		}
+
+		if wf.CompiledFrom == sourceFilename {
+			c.logger.Info("Trashing obsolete compilation product", "slug", slug, "source", sourceFilename)
+			if _, err := cleaner.TrashFile(c.cfg, filePath); err != nil {
+				c.logger.Warn("Failed to trash obsolete compilation product", "slug", slug, "error", err)
+			} else {
+				// Remove from INDEX.md
+				if err := index.Remove(indexPath, slug); err != nil {
+					c.logger.Warn("Failed to remove trashed slug from index", "slug", slug, "error", err)
+				}
+			}
+		}
+	}
+
+	return nil
 }
